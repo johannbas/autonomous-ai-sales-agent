@@ -1,0 +1,190 @@
+{
+  "name": "Autonomous AI Sales Agent",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 15
+            }
+          ]
+        }
+      },
+      "id": "sdr-0001",
+      "name": "15m Watchdog Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [100, 300]
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_CRM_SHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Leads",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "id": "sdr-0002",
+      "name": "Read Lead CRM",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [300, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const rows = $input.all();\nconst target = rows.find(r => r.json.Status === 'NEW_LEAD');\nif (!target) return [];\nreturn [target];"
+      },
+      "id": "sdr-0003",
+      "name": "Fetch Next New Lead",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [500, 300]
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_CRM_SHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Leads",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Lead_ID": "={{ $json.Lead_ID }}",
+            "Status": "RESEARCHING",
+            "Last_Updated": "={{ $now.toISO() }}"
+          },
+          "matchingColumns": ["Lead_ID"]
+        },
+        "options": {}
+      },
+      "id": "sdr-0004",
+      "name": "Lock Lead (RESEARCHING)",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [700, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key=YOUR_GEMINI_API_KEY",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"contents\": [{\n    \"parts\": [{\n      \"text\": \"Search the web for the company '{{ $json.Company }}' ({{ $json.Website }}). Find a recent news event, product launch, or company initiative. Then, write a 4-sentence cold email to {{ $json.Lead_Name }} at {{ $json.Company }}. Sentence 1: A personalized compliment based on your search. Sentence 2: Mention how scaling requires efficient systems. Sentence 3: Pitch our custom AI workflow automation services (n8n, agents). Sentence 4: Call to action for a 10-min chat. Keep it highly professional but natural.\"\n    }]\n  }],\n  \"tools\": [\n    { \"googleSearch\": {} }\n  ],\n  \"generationConfig\": {\n    \"temperature\": 0.4\n  }\n}",
+        "options": {}
+      },
+      "id": "sdr-0005",
+      "name": "Gemini Live Research & Draft",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "operation": "createDraft",
+        "subject": "=Ideas for scaling {{ $('Fetch Next New Lead').first().json.Company }}'s workflows",
+        "message": "={{ $json.candidates[0].content.parts[0].text }}",
+        "recipientEmail": "={{ $('Fetch Next New Lead').first().json.Email }}",
+        "options": {}
+      },
+      "id": "sdr-0006",
+      "name": "Create Gmail Draft",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [1100, 300]
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_CRM_SHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Leads",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Lead_ID": "={{ $('Fetch Next New Lead').first().json.Lead_ID }}",
+            "Status": "DRAFT_READY",
+            "Generated_Email": "={{ $('Gemini Live Research & Draft').first().json.candidates[0].content.parts[0].text }}",
+            "Last_Updated": "={{ $now.toISO() }}"
+          },
+          "matchingColumns": ["Lead_ID"]
+        },
+        "options": {}
+      },
+      "id": "sdr-0007",
+      "name": "Update CRM (DRAFT_READY)",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [1300, 300]
+    },
+    {
+      "parameters": {},
+      "id": "sdr-0008",
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [300, 500]
+    },
+    {
+      "parameters": {
+        "sendTo": "admin@yourdomain.com",
+        "subject": "🚨 AI SDR Pipeline Error",
+        "message": "=The sales agent failed on node: {{ $json.execution.lastNodeExecuted }}. Error: {{ $json.execution.error.message }}",
+        "options": {}
+      },
+      "id": "sdr-0009",
+      "name": "Alert Admin",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [500, 500]
+    }
+  ],
+  "connections": {
+    "15m Watchdog Trigger": {
+      "main": [[{ "node": "Read Lead CRM", "type": "main", "index": 0 }]]
+    },
+    "Read Lead CRM": {
+      "main": [[{ "node": "Fetch Next New Lead", "type": "main", "index": 0 }]]
+    },
+    "Fetch Next New Lead": {
+      "main": [[{ "node": "Lock Lead (RESEARCHING)", "type": "main", "index": 0 }]]
+    },
+    "Lock Lead (RESEARCHING)": {
+      "main": [[{ "node": "Gemini Live Research & Draft", "type": "main", "index": 0 }]]
+    },
+    "Gemini Live Research & Draft": {
+      "main": [[{ "node": "Create Gmail Draft", "type": "main", "index": 0 }]]
+    },
+    "Create Gmail Draft": {
+      "main": [[{ "node": "Update CRM (DRAFT_READY)", "type": "main", "index": 0 }]]
+    },
+    "Error Trigger": {
+      "main": [[{ "node": "Alert Admin", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
